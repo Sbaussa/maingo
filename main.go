@@ -30,11 +30,11 @@ type Config struct {
 func loadConfig() Config {
 	return Config{
 		Port:   getEnv("PORT", "8080"),
-		DBHost: getEnv("DB_HOST", "localhost"),
+		DBHost: getEnv("DB_HOST", "sql300.infinityfree.com"),
 		DBPort: getEnv("DB_PORT", "3306"),
-		DBUser: getEnv("DB_USER", "root"),
-		DBPass: getEnv("DB_PASS", ""),
-		DBName: getEnv("DB_NAME", "fixzone_db"),
+		DBUser: getEnv("DB_USER", "if0_41556058"),
+		DBPass: getEnv("DB_PASS", "Steven441911"),
+		DBName: getEnv("DB_NAME", "if0_41556058_fixzone_db"),
 	}
 }
 
