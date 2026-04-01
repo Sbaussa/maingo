@@ -112,6 +112,19 @@ type APIResponse struct {
 	Codigo  string      `json:"codigo,omitempty"`
 }
 
+// ── Fotos Model ──
+
+type ConsolaFoto struct {
+	ID         int       `json:"id"`
+	CodigoRep  string    `json:"codigo_rep"`
+	FotoBase64 string    `json:"foto"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type SubirFotosRequest struct {
+	Fotos []string `json:"fotos"` // array de base64
+}
+
 // ── Auth Models ──
 
 type GoogleLoginRequest struct {
@@ -264,28 +277,136 @@ func logMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// ── FOTOS HANDLERS ──
+
+// POST /api/fotos/{codigo} — Subir fotos (admin)
+// GET  /api/fotos/{codigo} — Obtener fotos (cliente)
+func fotosHandler(w http.ResponseWriter, r *http.Request) {
+	codigo := strings.TrimPrefix(r.URL.Path, "/api/fotos/")
+	codigo = strings.TrimSuffix(codigo, "/")
+	if codigo == "" {
+		writeError(w, http.StatusBadRequest, "Código requerido")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		obtenerFotos(w, r, codigo)
+	case http.MethodPost:
+		subirFotos(w, r, codigo)
+	case http.MethodDelete:
+		eliminarFotos(w, r, codigo)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
+	}
+}
+
+func obtenerFotos(w http.ResponseWriter, r *http.Request, codigo string) {
+	rows, err := db.Query(
+		"SELECT id, codigo_rep, foto_base64, created_at FROM consola_fotos WHERE codigo_rep = ? ORDER BY id ASC",
+		codigo,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Error consultando fotos")
+		return
+	}
+	defer rows.Close()
+
+	var fotos []ConsolaFoto
+	for rows.Next() {
+		var f ConsolaFoto
+		if err := rows.Scan(&f.ID, &f.CodigoRep, &f.FotoBase64, &f.CreatedAt); err != nil {
+			continue
+		}
+		fotos = append(fotos, f)
+	}
+	if fotos == nil {
+		fotos = []ConsolaFoto{}
+	}
+	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: fotos})
+}
+
+func subirFotos(w http.ResponseWriter, r *http.Request, codigo string) {
+	// Verificar que la reparación existe
+	var exists int
+	if err := db.QueryRow("SELECT COUNT(*) FROM reparaciones WHERE codigo = ?", codigo).Scan(&exists); err != nil || exists == 0 {
+		writeError(w, http.StatusNotFound, "Reparación no encontrada")
+		return
+	}
+
+	var req SubirFotosRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "JSON inválido")
+		return
+	}
+	if len(req.Fotos) == 0 {
+		writeError(w, http.StatusBadRequest, "No se enviaron fotos")
+		return
+	}
+	if len(req.Fotos) > 10 {
+		req.Fotos = req.Fotos[:10] // máximo 10 fotos por llamada
+	}
+
+	stmt, err := db.Prepare("INSERT INTO consola_fotos (codigo_rep, foto_base64) VALUES (?, ?)")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Error preparando inserción")
+		return
+	}
+	defer stmt.Close()
+
+	inserted := 0
+	for _, foto := range req.Fotos {
+		if foto == "" {
+			continue
+		}
+		if _, err := stmt.Exec(codigo, foto); err != nil {
+			log.Printf("Error insertando foto para %s: %v", codigo, err)
+			continue
+		}
+		inserted++
+	}
+
+	log.Printf("📸 %d fotos subidas para %s", inserted, codigo)
+	writeJSON(w, http.StatusCreated, APIResponse{
+		Success: true,
+		Data:    map[string]int{"subidas": inserted},
+	})
+}
+
+func eliminarFotos(w http.ResponseWriter, r *http.Request, codigo string) {
+	// Eliminar todas las fotos de una reparación (admin)
+	res, err := db.Exec("DELETE FROM consola_fotos WHERE codigo_rep = ?", codigo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Error eliminando fotos")
+		return
+	}
+	n, _ := res.RowsAffected()
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    map[string]int64{"eliminadas": n},
+	})
+}
+
+// ── AUTH HANDLERS ──
+
 func authGoogle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
 		return
 	}
-
 	var req GoogleLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, AuthResponse{Success: false, Error: "JSON inválido"})
 		return
 	}
-
 	if req.Email == "" {
 		writeJSON(w, http.StatusBadRequest, AuthResponse{Success: false, Error: "Email requerido"})
 		return
 	}
-
 	var userID int
 	var nombre, rol string
 	err := db.QueryRow("SELECT id, nombre, rol FROM usuarios WHERE email = ? AND activo = 1", req.Email).
 		Scan(&userID, &nombre, &rol)
-
 	if err == sql.ErrNoRows {
 		result, err := db.Exec(
 			`INSERT INTO usuarios (nombre, email, password_hash, rol, google_id, foto, ultimo_login) 
@@ -311,9 +432,7 @@ func authGoogle(w http.ResponseWriter, r *http.Request) {
 			req.Foto, req.GoogleID, userID)
 		log.Printf("🔑 Login Google: %s (%s) — %s", nombre, req.Email, rol)
 	}
-
 	token := createSession(userID, req.Email, nombre, rol, req.Foto)
-
 	writeJSON(w, http.StatusOK, AuthResponse{
 		Success: true, Token: token, Nombre: nombre,
 		Email: req.Email, Rol: rol, Foto: req.Foto,
@@ -325,24 +444,20 @@ func authLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
 		return
 	}
-
 	var req ManualLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, AuthResponse{Success: false, Error: "JSON inválido"})
 		return
 	}
-
 	if req.Email == "" || req.Password == "" {
 		writeJSON(w, http.StatusBadRequest, AuthResponse{Success: false, Error: "Email y contraseña requeridos"})
 		return
 	}
-
 	var userID int
 	var nombre, rol, passwordHash string
 	var foto sql.NullString
 	err := db.QueryRow("SELECT id, nombre, password_hash, rol, foto FROM usuarios WHERE email = ? AND activo = 1", req.Email).
 		Scan(&userID, &nombre, &passwordHash, &rol, &foto)
-
 	if err == sql.ErrNoRows {
 		writeJSON(w, http.StatusUnauthorized, AuthResponse{Success: false, Error: "Credenciales incorrectas"})
 		return
@@ -351,21 +466,17 @@ func authLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, AuthResponse{Success: false, Error: "Error del servidor"})
 		return
 	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
 		writeJSON(w, http.StatusUnauthorized, AuthResponse{Success: false, Error: "Credenciales incorrectas"})
 		return
 	}
-
 	db.Exec("UPDATE usuarios SET ultimo_login = NOW() WHERE id = ?", userID)
 	log.Printf("🔑 Login manual: %s (%s) — %s", nombre, req.Email, rol)
-
 	fotoStr := ""
 	if foto.Valid {
 		fotoStr = foto.String
 	}
 	token := createSession(userID, req.Email, nombre, rol, fotoStr)
-
 	writeJSON(w, http.StatusOK, AuthResponse{
 		Success: true, Token: token, Nombre: nombre,
 		Email: req.Email, Rol: rol,
@@ -436,11 +547,9 @@ func authRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	db.Exec("INSERT IGNORE INTO clientes (nombre, telefono, email) VALUES (?, ?, ?)", req.Nombre, req.Telefono, req.Email)
-
 	id, _ := result.LastInsertId()
 	token := createSession(int(id), req.Email, req.Nombre, "cliente", "")
 	log.Printf("🆕 Nuevo cliente registrado: %s (%s)", req.Nombre, req.Email)
-
 	writeJSON(w, http.StatusCreated, AuthResponse{
 		Success: true, Token: token, Nombre: req.Nombre,
 		Email: req.Email, Rol: "cliente",
@@ -688,14 +797,26 @@ func main() {
 	initDB(cfg)
 	defer db.Close()
 
-	for _, m := range []string{
+	// ── Migraciones automáticas ──
+	migrations := []string{
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
-	} {
+		// Tabla de fotos de consolas
+		`CREATE TABLE IF NOT EXISTS consola_fotos (
+			id          INT AUTO_INCREMENT PRIMARY KEY,
+			codigo_rep  VARCHAR(20)   NOT NULL,
+			foto_base64 LONGTEXT      NOT NULL,
+			created_at  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_codigo (codigo_rep),
+			FOREIGN KEY (codigo_rep) REFERENCES reparaciones(codigo) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	}
+	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {
 			log.Printf("⚠️  Migración: %v", err)
 		}
 	}
+	log.Println("✅ Migraciones aplicadas")
 
 	// ── Routes ──
 	http.HandleFunc("/api/auth/google", logMiddleware(corsMiddleware(authGoogle)))
@@ -704,6 +825,7 @@ func main() {
 	http.HandleFunc("/api/auth/me", logMiddleware(corsMiddleware(authMe)))
 	http.HandleFunc("/api/auth/logout", logMiddleware(corsMiddleware(authLogout)))
 	http.HandleFunc("/api/health", logMiddleware(corsMiddleware(healthCheck)))
+	http.HandleFunc("/api/fotos/", logMiddleware(corsMiddleware(fotosHandler)))
 	http.HandleFunc("/api/reparaciones/cliente/", logMiddleware(corsMiddleware(reparacionesPorCliente)))
 	http.HandleFunc("/api/reparaciones/update/", logMiddleware(corsMiddleware(actualizarReparacion)))
 	http.HandleFunc("/api/reparaciones", logMiddleware(corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -724,6 +846,9 @@ func main() {
 	addr := ":" + cfg.Port
 	log.Printf("🚀 Junior Technical Services API v2.0 en http://localhost%s", addr)
 	log.Printf("📋 Endpoints:")
+	log.Printf("   POST   /api/fotos/{codigo}   — Subir fotos (admin)")
+	log.Printf("   GET    /api/fotos/{codigo}   — Obtener fotos (cliente)")
+	log.Printf("   DELETE /api/fotos/{codigo}   — Eliminar fotos (admin)")
 	log.Printf("   POST   /api/auth/google")
 	log.Printf("   POST   /api/auth/login")
 	log.Printf("   POST   /api/auth/register")
