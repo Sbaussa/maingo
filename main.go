@@ -218,7 +218,7 @@ func initDB(cfg Config) {
 
 func generarCodigo() string {
 	chars := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	code := "FZ-"
+	code := "JTS-"
 	for i := 0; i < 6; i++ {
 		code += string(chars[mrand.Intn(len(chars))])
 	}
@@ -301,7 +301,6 @@ func authGoogle(w http.ResponseWriter, r *http.Request) {
 		userID = int(id)
 		nombre = req.Nombre
 		rol = "cliente"
-		// También crear en tabla clientes
 		db.Exec("INSERT IGNORE INTO clientes (nombre, telefono, email) VALUES (?, '', ?)", req.Nombre, req.Email)
 		log.Printf("🆕 Nuevo cliente Google: %s (%s)", req.Nombre, req.Email)
 	} else if err != nil {
@@ -373,7 +372,6 @@ func authLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/auth/me
 func authMe(w http.ResponseWriter, r *http.Request) {
 	token := extractToken(r)
 	if token == "" {
@@ -391,7 +389,6 @@ func authMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/auth/logout
 func authLogout(w http.ResponseWriter, r *http.Request) {
 	token := extractToken(r)
 	if token != "" {
@@ -400,7 +397,6 @@ func authLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{Success: true, Data: "Sesión cerrada"})
 }
 
-// POST /api/auth/register — Registrar nuevo cliente
 func authRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
@@ -419,20 +415,17 @@ func authRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, AuthResponse{Success: false, Error: "La contraseña debe tener al menos 6 caracteres"})
 		return
 	}
-	// Verificar que no exista
 	var exists int
 	db.QueryRow("SELECT COUNT(*) FROM usuarios WHERE email = ?", req.Email).Scan(&exists)
 	if exists > 0 {
 		writeJSON(w, http.StatusConflict, AuthResponse{Success: false, Error: "Ya existe una cuenta con este correo"})
 		return
 	}
-	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, AuthResponse{Success: false, Error: "Error del servidor"})
 		return
 	}
-	// Insertar como cliente
 	result, err := db.Exec(
 		`INSERT INTO usuarios (nombre, email, password_hash, rol, ultimo_login) VALUES (?, ?, ?, 'cliente', NOW())`,
 		req.Nombre, req.Email, string(hash),
@@ -442,7 +435,6 @@ func authRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, AuthResponse{Success: false, Error: "Error al crear la cuenta"})
 		return
 	}
-	// También crear como cliente en tabla clientes
 	db.Exec("INSERT IGNORE INTO clientes (nombre, telefono, email) VALUES (?, ?, ?)", req.Nombre, req.Telefono, req.Email)
 
 	id, _ := result.LastInsertId()
@@ -455,7 +447,6 @@ func authRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/reparaciones/cliente/{email} — Reparaciones de un cliente
 func reparacionesPorCliente(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
@@ -689,7 +680,7 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 	if err := db.Ping(); err != nil {
 		status = "error"
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": status, "service": "FixZone API", "version": "2.0.0"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": status, "service": "Junior Technical Services API", "version": "2.0.0"})
 }
 
 func main() {
@@ -697,7 +688,6 @@ func main() {
 	initDB(cfg)
 	defer db.Close()
 
-	// Migraciones automáticas para auth
 	for _, m := range []string{
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
@@ -732,7 +722,7 @@ func main() {
 	http.HandleFunc("/api/stats", logMiddleware(corsMiddleware(obtenerStats)))
 
 	addr := ":" + cfg.Port
-	log.Printf("🚀 FixZone API v2.0 en http://localhost%s", addr)
+	log.Printf("🚀 Junior Technical Services API v2.0 en http://localhost%s", addr)
 	log.Printf("📋 Endpoints:")
 	log.Printf("   POST   /api/auth/google")
 	log.Printf("   POST   /api/auth/login")
