@@ -122,7 +122,7 @@ type ConsolaFoto struct {
 }
 
 type SubirFotosRequest struct {
-	Fotos []string `json:"fotos"` // array de base64
+	Fotos []string `json:"fotos"`
 }
 
 // ── Auth Models ──
@@ -279,8 +279,6 @@ func logMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // ── FOTOS HANDLERS ──
 
-// POST /api/fotos/{codigo} — Subir fotos (admin)
-// GET  /api/fotos/{codigo} — Obtener fotos (cliente)
 func fotosHandler(w http.ResponseWriter, r *http.Request) {
 	codigo := strings.TrimPrefix(r.URL.Path, "/api/fotos/")
 	codigo = strings.TrimSuffix(codigo, "/")
@@ -288,7 +286,6 @@ func fotosHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Código requerido")
 		return
 	}
-
 	switch r.Method {
 	case http.MethodGet:
 		obtenerFotos(w, r, codigo)
@@ -307,11 +304,11 @@ func obtenerFotos(w http.ResponseWriter, r *http.Request, codigo string) {
 		codigo,
 	)
 	if err != nil {
+		log.Printf("Error consultando fotos para %s: %v", codigo, err)
 		writeError(w, http.StatusInternalServerError, "Error consultando fotos")
 		return
 	}
 	defer rows.Close()
-
 	var fotos []ConsolaFoto
 	for rows.Next() {
 		var f ConsolaFoto
@@ -327,16 +324,19 @@ func obtenerFotos(w http.ResponseWriter, r *http.Request, codigo string) {
 }
 
 func subirFotos(w http.ResponseWriter, r *http.Request, codigo string) {
-	// Verificar que la reparación existe
 	var exists int
 	if err := db.QueryRow("SELECT COUNT(*) FROM reparaciones WHERE codigo = ?", codigo).Scan(&exists); err != nil || exists == 0 {
 		writeError(w, http.StatusNotFound, "Reparación no encontrada")
 		return
 	}
 
+	// Aumentar límite para base64 de imágenes
+	r.Body = http.MaxBytesReader(w, r.Body, 50<<20) // 50MB
+
 	var req SubirFotosRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "JSON inválido")
+		log.Printf("Error decodificando fotos para %s: %v", codigo, err)
+		writeError(w, http.StatusBadRequest, "JSON inválido o demasiado grande")
 		return
 	}
 	if len(req.Fotos) == 0 {
@@ -344,11 +344,12 @@ func subirFotos(w http.ResponseWriter, r *http.Request, codigo string) {
 		return
 	}
 	if len(req.Fotos) > 10 {
-		req.Fotos = req.Fotos[:10] // máximo 10 fotos por llamada
+		req.Fotos = req.Fotos[:10]
 	}
 
 	stmt, err := db.Prepare("INSERT INTO consola_fotos (codigo_rep, foto_base64) VALUES (?, ?)")
 	if err != nil {
+		log.Printf("Error preparando inserción fotos: %v", err)
 		writeError(w, http.StatusInternalServerError, "Error preparando inserción")
 		return
 	}
@@ -374,7 +375,6 @@ func subirFotos(w http.ResponseWriter, r *http.Request, codigo string) {
 }
 
 func eliminarFotos(w http.ResponseWriter, r *http.Request, codigo string) {
-	// Eliminar todas las fotos de una reparación (admin)
 	res, err := db.Exec("DELETE FROM consola_fotos WHERE codigo_rep = ?", codigo)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Error eliminando fotos")
@@ -409,7 +409,7 @@ func authGoogle(w http.ResponseWriter, r *http.Request) {
 		Scan(&userID, &nombre, &rol)
 	if err == sql.ErrNoRows {
 		result, err := db.Exec(
-			`INSERT INTO usuarios (nombre, email, password_hash, rol, google_id, foto, ultimo_login) 
+			`INSERT INTO usuarios (nombre, email, password_hash, rol, google_id, foto, ultimo_login)
 			 VALUES (?, ?, '', 'cliente', ?, ?, NOW())`,
 			req.Nombre, req.Email, req.GoogleID, req.Foto,
 		)
@@ -604,8 +604,8 @@ func crearReparacion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	codigo := generarCodigo()
-	_, err := db.Exec(`INSERT INTO reparaciones 
-		(codigo, nombre_cliente, telefono, email, consola_slug, problema, estado, prioridad) 
+	_, err := db.Exec(`INSERT INTO reparaciones
+		(codigo, nombre_cliente, telefono, email, consola_slug, problema, estado, prioridad)
 		VALUES (?, ?, ?, ?, ?, ?, 'pendiente', 'normal')`,
 		codigo, req.Nombre, req.Telefono, req.Email, req.Consola, req.Problema)
 	if err != nil {
@@ -613,7 +613,7 @@ func crearReparacion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Error al registrar la solicitud")
 		return
 	}
-	db.Exec(`INSERT INTO historial_estados (reparacion_id, estado_nuevo, comentario) 
+	db.Exec(`INSERT INTO historial_estados (reparacion_id, estado_nuevo, comentario)
 		SELECT id, 'pendiente', 'Solicitud recibida desde la web' FROM reparaciones WHERE codigo = ?`, codigo)
 	writeJSON(w, http.StatusCreated, APIResponse{Success: true, Codigo: codigo, Data: map[string]string{"mensaje": "Solicitud registrada exitosamente"}})
 }
@@ -630,8 +630,8 @@ func listarReparaciones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	estado := r.URL.Query().Get("estado")
-	query := `SELECT id, codigo, nombre_cliente, telefono, email, consola_slug, 
-		problema, diagnostico, precio_cotizado, precio_final, estado, prioridad, 
+	query := `SELECT id, codigo, nombre_cliente, telefono, email, consola_slug,
+		problema, diagnostico, precio_cotizado, precio_final, estado, prioridad,
 		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico FROM reparaciones`
 	args := []interface{}{}
 	if estado != "" {
@@ -801,14 +801,13 @@ func main() {
 	migrations := []string{
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
-		// Tabla de fotos de consolas
+		// Sin FOREIGN KEY para evitar fallos en Railway
 		`CREATE TABLE IF NOT EXISTS consola_fotos (
 			id          INT AUTO_INCREMENT PRIMARY KEY,
-			codigo_rep  VARCHAR(20)   NOT NULL,
-			foto_base64 LONGTEXT      NOT NULL,
-			created_at  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_codigo (codigo_rep),
-			FOREIGN KEY (codigo_rep) REFERENCES reparaciones(codigo) ON DELETE CASCADE
+			codigo_rep  VARCHAR(20) NOT NULL,
+			foto_base64 LONGTEXT    NOT NULL,
+			created_at  TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_codigo (codigo_rep)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
 	for _, m := range migrations {
