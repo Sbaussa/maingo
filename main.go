@@ -256,6 +256,40 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
+// ── NUEVO: Middleware de seguridad ──
+// Agrega todos los headers HTTP de seguridad a cada respuesta.
+func securityMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Fuerza HTTPS y evita downgrade a HTTP
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		// Evita que el sitio sea embebido en iframes ajenos (anti-Clickjacking)
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		// Evita que el navegador adivine el tipo de contenido
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Protección XSS básica para navegadores antiguos
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		// Controla qué información de referencia se comparte
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Restringe acceso a funciones del navegador
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=()")
+		// Content Security Policy: ajusta los dominios si usas CDNs externos
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com; "+
+				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+				"font-src 'self' https://fonts.gstatic.com; "+
+				"img-src 'self' data: https:; "+
+				"connect-src 'self' https://accounts.google.com; "+
+				"frame-src https://accounts.google.com; "+
+				"frame-ancestors 'self'; "+
+				"base-uri 'self'; "+
+				"form-action 'self';")
+		// Oculta información del servidor
+		w.Header().Del("X-Powered-By")
+		next(w, r)
+	}
+}
+
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -330,7 +364,6 @@ func subirFotos(w http.ResponseWriter, r *http.Request, codigo string) {
 		return
 	}
 
-	// Aumentar límite para base64 de imágenes
 	r.Body = http.MaxBytesReader(w, r.Body, 50<<20) // 50MB
 
 	var req SubirFotosRequest
@@ -801,7 +834,6 @@ func main() {
 	migrations := []string{
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
-		// Sin FOREIGN KEY para evitar fallos en Railway
 		`CREATE TABLE IF NOT EXISTS consola_fotos (
 			id          INT AUTO_INCREMENT PRIMARY KEY,
 			codigo_rep  VARCHAR(20) NOT NULL,
@@ -818,16 +850,22 @@ func main() {
 	log.Println("✅ Migraciones aplicadas")
 
 	// ── Routes ──
-	http.HandleFunc("/api/auth/google", logMiddleware(corsMiddleware(authGoogle)))
-	http.HandleFunc("/api/auth/login", logMiddleware(corsMiddleware(authLogin)))
-	http.HandleFunc("/api/auth/register", logMiddleware(corsMiddleware(authRegister)))
-	http.HandleFunc("/api/auth/me", logMiddleware(corsMiddleware(authMe)))
-	http.HandleFunc("/api/auth/logout", logMiddleware(corsMiddleware(authLogout)))
-	http.HandleFunc("/api/health", logMiddleware(corsMiddleware(healthCheck)))
-	http.HandleFunc("/api/fotos/", logMiddleware(corsMiddleware(fotosHandler)))
-	http.HandleFunc("/api/reparaciones/cliente/", logMiddleware(corsMiddleware(reparacionesPorCliente)))
-	http.HandleFunc("/api/reparaciones/update/", logMiddleware(corsMiddleware(actualizarReparacion)))
-	http.HandleFunc("/api/reparaciones", logMiddleware(corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	// NOTA: securityMiddleware se aplica a todas las rutas para garantizar
+	// que cada respuesta incluya los headers de seguridad HTTP.
+	chain := func(h http.HandlerFunc) http.HandlerFunc {
+		return logMiddleware(securityMiddleware(corsMiddleware(h)))
+	}
+
+	http.HandleFunc("/api/auth/google", chain(authGoogle))
+	http.HandleFunc("/api/auth/login", chain(authLogin))
+	http.HandleFunc("/api/auth/register", chain(authRegister))
+	http.HandleFunc("/api/auth/me", chain(authMe))
+	http.HandleFunc("/api/auth/logout", chain(authLogout))
+	http.HandleFunc("/api/health", chain(healthCheck))
+	http.HandleFunc("/api/fotos/", chain(fotosHandler))
+	http.HandleFunc("/api/reparaciones/cliente/", chain(reparacionesPorCliente))
+	http.HandleFunc("/api/reparaciones/update/", chain(actualizarReparacion))
+	http.HandleFunc("/api/reparaciones", chain(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			crearReparacion(w, r)
@@ -836,18 +874,19 @@ func main() {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "Método no permitido")
 		}
-	})))
-	http.HandleFunc("/api/reparaciones/", logMiddleware(corsMiddleware(listarReparaciones)))
-	http.HandleFunc("/api/consolas", logMiddleware(corsMiddleware(listarConsolas)))
-	http.HandleFunc("/api/servicios", logMiddleware(corsMiddleware(listarServicios)))
-	http.HandleFunc("/api/stats", logMiddleware(corsMiddleware(obtenerStats)))
+	}))
+	http.HandleFunc("/api/reparaciones/", chain(listarReparaciones))
+	http.HandleFunc("/api/consolas", chain(listarConsolas))
+	http.HandleFunc("/api/servicios", chain(listarServicios))
+	http.HandleFunc("/api/stats", chain(obtenerStats))
 
 	addr := ":" + cfg.Port
 	log.Printf("🚀 Junior Technical Services API v2.0 en http://localhost%s", addr)
+	log.Printf("🔒 Headers de seguridad activos: HSTS, CSP, X-Frame-Options, X-Content-Type-Options")
 	log.Printf("📋 Endpoints:")
-	log.Printf("   POST   /api/fotos/{codigo}   — Subir fotos (admin)")
-	log.Printf("   GET    /api/fotos/{codigo}   — Obtener fotos (cliente)")
-	log.Printf("   DELETE /api/fotos/{codigo}   — Eliminar fotos (admin)")
+	log.Printf("   POST   /api/fotos/{codigo}")
+	log.Printf("   GET    /api/fotos/{codigo}")
+	log.Printf("   DELETE /api/fotos/{codigo}")
 	log.Printf("   POST   /api/auth/google")
 	log.Printf("   POST   /api/auth/login")
 	log.Printf("   POST   /api/auth/register")
