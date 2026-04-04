@@ -64,6 +64,7 @@ type Reparacion struct {
 	FechaEntrega   *time.Time `json:"fecha_entrega"`
 	GarantiaMeses  int        `json:"garantia_meses"`
 	NotasTecnico   *string    `json:"notas_tecnico"`
+	MetodoPago     *string    `json:"metodo_pago"`
 }
 
 type NuevaReparacion struct {
@@ -80,6 +81,7 @@ type ActualizarEstado struct {
 	PrecioCotizado *float64 `json:"precio_cotizado,omitempty"`
 	GarantiaMeses  *int     `json:"garantia_meses,omitempty"`
 	NotasTecnico   *string  `json:"notas_tecnico,omitempty"`
+	MetodoPago     *string  `json:"metodo_pago,omitempty"`
 }
 
 type Consola struct {
@@ -602,7 +604,7 @@ func reparacionesPorCliente(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := db.Query(`SELECT id, codigo, nombre_cliente, telefono, email, consola_slug,
 		problema, diagnostico, precio_cotizado, precio_final, estado, prioridad,
-		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico
+		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico, metodo_pago
 		FROM reparaciones WHERE email = ? ORDER BY fecha_ingreso DESC`, email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Error consultando reparaciones")
@@ -615,7 +617,7 @@ func reparacionesPorCliente(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&rep.ID, &rep.Codigo, &rep.NombreCliente, &rep.Telefono, &rep.Email,
 			&rep.ConsolaSlug, &rep.Problema, &rep.Diagnostico, &rep.PrecioCotizado,
 			&rep.PrecioFinal, &rep.Estado, &rep.Prioridad, &rep.FechaIngreso,
-			&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico); err != nil {
+			&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico, &rep.MetodoPago); err != nil {
 			continue
 		}
 		reps = append(reps, rep)
@@ -666,7 +668,7 @@ func listarReparaciones(w http.ResponseWriter, r *http.Request) {
 	estado := r.URL.Query().Get("estado")
 	query := `SELECT id, codigo, nombre_cliente, telefono, email, consola_slug,
 		problema, diagnostico, precio_cotizado, precio_final, estado, prioridad,
-		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico FROM reparaciones`
+		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico, metodo_pago FROM reparaciones`
 	args := []interface{}{}
 	if estado != "" {
 		query += " WHERE estado = ?"
@@ -685,7 +687,7 @@ func listarReparaciones(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&rep.ID, &rep.Codigo, &rep.NombreCliente, &rep.Telefono, &rep.Email,
 			&rep.ConsolaSlug, &rep.Problema, &rep.Diagnostico, &rep.PrecioCotizado,
 			&rep.PrecioFinal, &rep.Estado, &rep.Prioridad, &rep.FechaIngreso,
-			&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico); err != nil {
+			&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico, &rep.MetodoPago); err != nil {
 			continue
 		}
 		reparaciones = append(reparaciones, rep)
@@ -697,12 +699,12 @@ func consultarReparacion(w http.ResponseWriter, r *http.Request, codigo string) 
 	var rep Reparacion
 	err := db.QueryRow(`SELECT id, codigo, nombre_cliente, telefono, email, consola_slug,
 		problema, diagnostico, precio_cotizado, precio_final, estado, prioridad,
-		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico
+		fecha_ingreso, fecha_entrega, garantia_meses, notas_tecnico, metodo_pago
 		FROM reparaciones WHERE codigo = ?`, codigo).Scan(
 		&rep.ID, &rep.Codigo, &rep.NombreCliente, &rep.Telefono, &rep.Email,
 		&rep.ConsolaSlug, &rep.Problema, &rep.Diagnostico, &rep.PrecioCotizado,
 		&rep.PrecioFinal, &rep.Estado, &rep.Prioridad, &rep.FechaIngreso,
-		&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico)
+		&rep.FechaEntrega, &rep.GarantiaMeses, &rep.NotasTecnico, &rep.MetodoPago)
 	if err == sql.ErrNoRows {
 		writeError(w, http.StatusNotFound, "Reparación no encontrada")
 		return
@@ -759,6 +761,10 @@ func actualizarReparacion(w http.ResponseWriter, r *http.Request) {
 	if req.NotasTecnico != nil {
 		query += ", notas_tecnico = ?"
 		args = append(args, *req.NotasTecnico)
+	}
+	if req.MetodoPago != nil {
+		query += ", metodo_pago = ?"
+		args = append(args, *req.MetodoPago)
 	}
 	if req.Estado == "entregado" {
 		query += ", fecha_entrega = NOW()"
@@ -839,6 +845,7 @@ func main() {
 	migrations := []string{
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
 		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
+		"ALTER TABLE reparaciones ADD COLUMN IF NOT EXISTS metodo_pago VARCHAR(20) DEFAULT NULL",
 		`CREATE TABLE IF NOT EXISTS consola_fotos (
 			id          INT AUTO_INCREMENT PRIMARY KEY,
 			codigo_rep  VARCHAR(20) NOT NULL,
