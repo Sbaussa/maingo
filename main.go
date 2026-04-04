@@ -842,10 +842,12 @@ func main() {
 	defer db.Close()
 
 	// ── Migraciones automáticas ──
+	// NOTA: ALTER TABLE ADD COLUMN no soporta IF NOT EXISTS en MySQL.
+	// Si la columna ya existe, el error se ignora silenciosamente.
 	migrations := []string{
-		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS google_id VARCHAR(100) DEFAULT NULL",
-		"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto VARCHAR(500) DEFAULT NULL",
-		"ALTER TABLE reparaciones ADD COLUMN IF NOT EXISTS metodo_pago VARCHAR(20) DEFAULT NULL",
+		"ALTER TABLE usuarios ADD COLUMN google_id VARCHAR(100) DEFAULT NULL",
+		"ALTER TABLE usuarios ADD COLUMN foto VARCHAR(500) DEFAULT NULL",
+		"ALTER TABLE reparaciones ADD COLUMN metodo_pago VARCHAR(20) DEFAULT NULL",
 		`CREATE TABLE IF NOT EXISTS consola_fotos (
 			id          INT AUTO_INCREMENT PRIMARY KEY,
 			codigo_rep  VARCHAR(20) NOT NULL,
