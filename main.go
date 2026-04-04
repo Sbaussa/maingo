@@ -78,6 +78,7 @@ type ActualizarEstado struct {
 	Estado         string   `json:"estado"`
 	Diagnostico    *string  `json:"diagnostico,omitempty"`
 	PrecioCotizado *float64 `json:"precio_cotizado,omitempty"`
+	GarantiaMeses  *int     `json:"garantia_meses,omitempty"`
 	NotasTecnico   *string  `json:"notas_tecnico,omitempty"`
 }
 
@@ -750,6 +751,10 @@ func actualizarReparacion(w http.ResponseWriter, r *http.Request) {
 	if req.PrecioCotizado != nil {
 		query += ", precio_cotizado = ?"
 		args = append(args, *req.PrecioCotizado)
+	}
+	if req.GarantiaMeses != nil {
+		query += ", garantia_meses = ?"
+		args = append(args, *req.GarantiaMeses)
 	}
 	if req.NotasTecnico != nil {
 		query += ", notas_tecnico = ?"
